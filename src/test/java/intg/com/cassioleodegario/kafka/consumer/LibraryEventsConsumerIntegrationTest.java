@@ -1,9 +1,12 @@
 package com.cassioleodegario.kafka.consumer;
 
+import com.cassioleodegario.kafka.entity.Book;
 import com.cassioleodegario.kafka.entity.LibraryEvent;
+import com.cassioleodegario.kafka.entity.LibraryEventType;
 import com.cassioleodegario.kafka.jpa.LibraryEventsRepository;
 import com.cassioleodegario.kafka.service.LibraryEventsService;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -55,6 +58,9 @@ public class LibraryEventsConsumerIntegrationTest {
     @Autowired
     LibraryEventsRepository libraryEventsRepository;
 
+    @Autowired
+    ObjectMapper objectMapper;
+
     @BeforeEach
     void setUp() {
         for(MessageListenerContainer messageListenerContainer : endpointRegistry.getListenerContainers()){
@@ -93,5 +99,41 @@ public class LibraryEventsConsumerIntegrationTest {
 
         });
 
+    }
+
+    @Test
+    void publishUpdateLibraryEvent() throws JsonProcessingException, ExecutionException, InterruptedException {
+        //given
+        String json = "{\n" +
+                "    \"libraryEventId\":null,\n" +
+                "    \"libraryEventType\":\"NEW\",\n" +
+                "    \"book\":{\n" +
+                "        \"bookId\":456,\n" +
+                "        \"bookName\":\"Kafka Using Spring Boot 2.0\",\n" +
+                "        \"bookAuthor\":\"Dilip\"\n" +
+                "    }\n" +
+                "    \n" +
+                "}";
+        LibraryEvent libraryEvent = objectMapper.readValue(json, LibraryEvent.class);
+        libraryEvent.getBook().setLibraryEvent(libraryEvent);
+        libraryEventsRepository.save(libraryEvent);
+        Book updatedBook = Book.builder()
+                .bookId(456)
+                .bookName("Kafka Using Spring boot 2.x")
+                .bookAuthor("Cassio")
+                .build();
+        libraryEvent.setLibraryEventType(LibraryEventType.UPDATE);
+        libraryEvent.setBook(updatedBook);
+        String updatedJson = objectMapper.writeValueAsString(libraryEvent);
+        kafkaTemplate.sendDefault(libraryEvent.getLibraryEventId(), updatedJson).get();
+        //when
+        CountDownLatch latch = new CountDownLatch(1);
+        latch.await(3, TimeUnit.SECONDS);
+
+        //then
+        verify(libraryEventsConsumerSpy, times(1)).onMessage(isA(ConsumerRecord.class));
+        verify(libraryEventsServiceSpy, times(1)).processLibraryEvent(isA(ConsumerRecord.class));
+        LibraryEvent persistedLibraryEvent = libraryEventsRepository.findById(libraryEvent.getLibraryEventId()).get();
+        assertEquals("Kafka Using Spring boot 2.x", persistedLibraryEvent.getBook().getBookName());
     }
 }
